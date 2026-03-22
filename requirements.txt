@@ -17,3 +17,5 @@ email-validator
 aiohttp
 slugify
 pydantic-settings==2.1.0
+google-auth==2.23.4
+google-auth-oauthlib==1.1.0
