@@ -4,8 +4,8 @@ from typing import Optional, Dict, Any, Union
 from jose import JWTError, jwt
 from fastapi import HTTPException, status, Depends
 from fastapi.security import OAuth2PasswordBearer
-import google.auth.transport.requests
-import google.oauth2.id_token
+from google.auth.transport import requests
+from google.oauth2 import id_token
 from google.auth.exceptions import GoogleAuthError
 import secrets
 import aiohttp
@@ -186,13 +186,12 @@ class SecurityManager:
             logger.error("Google OAuth not configured")
             return None
         try:
-            request = google.auth.transport.requests.Request()
-            id_info = google.oauth2.id_token.verify_oauth2_token(
+            request = requests.Request()
+            id_info = id_token.verify_oauth2_token(
                 token,
-                google.auth.transport.requests.Request(),
+                requests.Request(),
                 settings.GOOGLE_CLIENT_ID
-            )
-            
+                )
             # Validate
             if id_info['aud'] != settings.GOOGLE_CLIENT_ID:
                 logger.error(f"Invalid audience: {id_info['aud']} != {settings.GOOGLE_CLIENT_ID}")
