@@ -152,22 +152,32 @@ async def get_cj_access_token() -> str:
 def extract_product_id_from_url(url: str) -> str:
     """URL'den ürün ID'sini çıkar - TÜM FORMATLARI DENE"""
     
-    # 1. YENİ RAKAM FORMATI: ...-p-2407080551161616500.html
-    match = re.search(r'-p-(\d{10,})\.html$', url)
+    # 1. /product/details/ UUID FORMATI (YENİ)
+    match = re.search(r'/product/details/([A-Z0-9-]+)', url)
     if match:
         return match.group(1)
     
-    # 2. ESKİ RAKAM FORMATI: .../product/2407080551161616500.html
-    match = re.search(r'/product/(\d{10,})\.html$', url)
+    # 2. /product/details/ RAKAM FORMATI
+    match = re.search(r'/product/details/(\d+)', url)
     if match:
         return match.group(1)
     
-    # 3. UUID FORMATI (YENİ WEB SİTESİ): ...-p-0E94A308-8CE9-4FAF-8B82-39FFF20AA837.html
-    match = re.search(r'-p-([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\.html$', url)
+    # 3. -p- UUID FORMATI (ESKİ)
+    match = re.search(r'-p-([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})', url)
     if match:
         return match.group(1)
     
-    # 4. HİÇBİRİ YOKSA HATA
+    # 4. -p- RAKAM FORMATI
+    match = re.search(r'-p-(\d{10,})', url)
+    if match:
+        return match.group(1)
+    
+    # 5. /product/ RAKAM FORMATI
+    match = re.search(r'/product/(\d{10,})', url)
+    if match:
+        return match.group(1)
+    
+    # 6. HİÇBİRİ YOKSA HATA
     raise ValidationException(f"URL'den ID çıkarılamadı: {url}")
 
 
