@@ -16,4 +16,4 @@ alembic
 email-validator
 aiohttp
 slugify
-pydantic-settings
+pydantic-settings==2.1.0
