@@ -85,13 +85,27 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:5173",  # ✅ React Vite portu
         "https://staying-tahoe-departure-logged.trycloudflare.com",
-        "http://127.0.0.1:5173",  # ✅ Alternatif
+        "http://127.0.0.1:5173",  # ✅ Alternatif,
+        "https://crafotra.netlify.app",
     ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["*"],
 )
+
+@app.options("/{path:path}")
+async def options_handler(request: Request):
+    """Handle OPTIONS requests for CORS"""
+    return Response(
+        status_code=200,
+        headers={
+            "Access-Control-Allow-Origin": "https://crafotra.netlify.app",
+            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization",
+            "Access-Control-Allow-Credentials": "true",
+        }
+    )
 
 # ==================== HEALTH CHECK ====================
 
