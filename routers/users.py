@@ -222,6 +222,7 @@ class UserResponse(TimestampSchema):
     role: UserRole
     is_active: bool
     is_verified: bool
+    shop_id: Optional[str] = None
     
     cj_connected: bool = False
     cj_email: Optional[str] = None

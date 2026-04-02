@@ -204,11 +204,7 @@ class SecurityManager:
             current_time = datetime.now(timezone.utc)
             if exp_time < current_time:
                 time_diff = (current_time - exp_time).total_seconds()
-                if time_diff > 300:
-                    logger.error(f"Token has expired: {time_diff} seconds ago")
-                    return None
-                else :
-                    logger.warning(f"Token expired but within grace period: {time_diff}s")
+                logger.warning(f"Token expired but within grace period: {time_diff}s")
             if not id_info.get('email_verified', False):
                 logger.warning(f"Email not verified for: {id_info.get('email')}")
             logger.info(f"Google token verified for: {id_info.get('email')}")

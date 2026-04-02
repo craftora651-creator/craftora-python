@@ -52,6 +52,12 @@ from routers.orders import (
     OrderFulfillmentRequest,
     OrderDeliveryConfirmation
 )
+import logging
+from sqlalchemy import text, cast
+from uuid import UUID
+from sqlalchemy.types import String
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/orders", tags=["orders"])
 
@@ -258,13 +264,17 @@ async def create_order(
             tax_total=totals["tax_total"],
             platform_fee=totals["platform_fee"],
             order_total=totals["order_total"],
-            items=validated_items,
+            
             item_count=totals["item_count"],
             order_type="mixed" if len(set(item["product_type"] for item in validated_items)) > 1 
                       else validated_items[0]["product_type"],
             requires_shipping=any(item["product_type"] == "physical" for item in validated_items),
             status=OrderStatus.PENDING,
-            fulfillment_status=FulfillmentStatus.UNFULFILLED
+            fulfillment_status=FulfillmentStatus.UNFULFILLED,meta_data={
+                "items": validated_items,  # ✅ items'ı meta_data'ya kaydet
+                "cart_id": order_data.cart_id,
+                "created_via": "api"
+            }
         )
         
         db.add(order)
@@ -391,9 +401,16 @@ async def send_order_confirmation_email(order_id: str, customer_email: str):
 
 # ==================== ORDER VIEWING ====================
 
+# ==================== ORDER VIEWING ====================
+
+# api/orders.py - get_my_orders fonksiyonunda items'ı kaldır
+
+from sqlalchemy import text
+from uuid import UUID
+
 @router.get("/my", response_model=List[OrderCustomer])
 async def get_my_orders(
-    status: Optional[OrderStatus] = Query(None),
+    status: Optional[str] = Query(None, alias="status"),
     shop_id: Optional[str] = Query(None),
     date_from: Optional[datetime] = Query(None),
     date_to: Optional[datetime] = Query(None),
@@ -404,70 +421,139 @@ async def get_my_orders(
     Get current user's orders (as buyer).
     """
     try:
-        query = select(Order).where(
-            Order.buyer_id == current_user["sub"]
-        ).options(
-            joinedload(Order.shop)
+        buyer_uuid = UUID(current_user["sub"])
+        
+        query = select(
+            Order.id,
+            Order.order_number,
+            Order.buyer_id,
+            Order.customer_name,
+            Order.customer_email,
+            Order.customer_phone,
+            Order.order_total,
+            Order.status,
+            Order.created_at,
+            Order.digital_delivered,
+            Order.digital_delivered_at,
+            Order.order_type,
+            Order.shop_id,
+            text("metadata")
+        ).where(
+            Order.buyer_id == buyer_uuid
         )
         
+        # ✅ status'ü string'e cast et ve karşılaştır
         if status:
-            query = query.where(Order.status == status)
+            query = query.where(cast(Order.status, String) == status.lower())
         
-        if shop_id:
-            # Get orders containing products from this shop
-            query = query.where(
-                Order.items.any(f"$.shop_id == '{shop_id}'")
-            )
         if date_from:
             query = query.where(Order.created_at >= date_from)
         if date_to:
             query = query.where(Order.created_at <= date_to)
+        
         query = query.order_by(Order.created_at.desc())
         result = await db.execute(query)
-        orders = result.scalars().all()
+        rows = result.all()
+        
         customer_orders = []
-        for order in orders:
-            order_dict = OrderCustomer.from_orm(order).dict()
-            if order.items:
-                first_item = order.items[0]
-                shop_info = await get_shop_info(first_item["shop_id"], db)
+        for row in rows:
+            metadata_value = row[-1]
+            items_list = []
+            if metadata_value and isinstance(metadata_value, dict) and "items" in metadata_value:
+                items_list = metadata_value.get("items", [])
+            
+            order_dict = {
+                "id": str(row[0]),
+                "order_id": str(row[0]),
+                "order_number": row[1],
+                "buyer_id": str(row[2]) if row[2] else None,
+                "customer": {
+                    "name": row[3],
+                    "email": row[4],
+                    "phone": row[5],
+                    "avatar": f"https://ui-avatars.com/api/?name={row[3]}&background=0ea5e9&color=fff&size=40"
+                },
+                "customer_name": row[3],
+                "customer_email": row[4],
+                "customer_phone": row[5],
+                "items": items_list,
+                "products": items_list,
+                "total_amount": float(row[6]) if row[6] else 0,
+                "totalAmount": float(row[6]) if row[6] else 0,
+                "status": row[7] if row[7] else "PENDING",
+                "orderStatus": row[7] if row[7] else "PENDING",
+                "created_at": row[8].isoformat() if row[8] else datetime.utcnow().isoformat(),
+                "orderDate": row[8].isoformat() if row[8] else datetime.utcnow().isoformat(),
+                "digital_delivered": row[9] if row[9] else False,
+                "digital_delivered_at": row[10].isoformat() if row[10] else None,
+                "order_type": row[11] if row[11] else "digital",
+                "shop_id": str(row[12]) if row[12] else None
+            }
+            
+            if row[12]:
+                shop_info = await get_shop_info(str(row[12]), db)
                 if shop_info:
                     order_dict.update(shop_info)
-            order_dict.update({
-                "can_cancel": order.status in [OrderStatus.PENDING, OrderStatus.PROCESSING],
-                "cancel_deadline": order.created_at + timedelta(hours=24) if order.status == OrderStatus.PENDING else None,
-                "can_request_refund": order.status == OrderStatus.COMPLETED and order.days_since_creation <= 30,
-                "refund_deadline": order.created_at + timedelta(days=30) if order.status == OrderStatus.COMPLETED else None,
-                "can_download_digital": order.digital_delivered and order.order_type in ["digital", "mixed"],
-                "can_review": order.status == OrderStatus.COMPLETED and order.days_since_creation <= 14,
-                "review_deadline": order.created_at + timedelta(days=14) if order.status == OrderStatus.COMPLETED else None
-            })
+            
             customer_orders.append(order_dict)
+        
+        logger.info(f"Found {len(customer_orders)} orders for user {current_user.get('email')}")
         return customer_orders
+        
     except Exception as e:
-        logger.error(f"Error getting user orders: {e}")
+        logger.error(f"Error getting user orders: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Could not retrieve your orders"
+            status_code=500,
+            detail=f"Could not retrieve your orders: {str(e)}"
         )
 
+
+# TEK BİR get_shop_info fonksiyonu - aşağıdaki iki tanımdan SADECE BİRİNİ bırak
 async def get_shop_info(shop_id: str, db: AsyncSession) -> Optional[Dict[str, Any]]:
     """Get shop info for order display."""
     try:
+        if not shop_id:
+            return None
+            
         result = await db.execute(
             select(Shop).where(Shop.id == shop_id)
         )
         shop = result.scalar_one_or_none()
         if shop:
             return {
+                "shop_id": str(shop.id),
                 "shop_name": shop.name,
                 "shop_slug": shop.slug,
                 "shop_logo_url": shop.logo_url,
-                "shop_is_verified": shop.is_verified
+                "shop_is_verified": shop.is_verified if hasattr(shop, 'is_verified') else False
             }
         return None
-    except:
+    except Exception as e:
+        logger.warning(f"Could not get shop info for {shop_id}: {e}")
         return None
+
+# AŞAĞIDAKİ İKİNCİ get_shop_info TANIMINI SİL!
+# async def get_shop_info(shop_id: str, db: AsyncSession) -> Optional[Dict[str, Any]]:
+#     """Get shop info for order display."""
+#     try:
+#         result = await db.execute(
+#             select(Shop).where(Shop.id == shop_id)
+#         )
+#         shop = result.scalar_one_or_none()
+#         if shop:
+#             return {
+#                 "shop_name": shop.name,
+#                 "shop_slug": shop.slug,
+#                 "shop_logo_url": shop.logo_url,
+#                 "shop_is_verified": shop.is_verified
+#             }
+#         return None
+#     except:
+#         return None
+
+
 
 @router.get("/shop/{shop_id}", response_model=List[OrderSeller])
 async def get_shop_orders(

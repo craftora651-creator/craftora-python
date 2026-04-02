@@ -156,6 +156,8 @@ async def get_user_public_profile(
 
 
 
+# routers/users.py - get_my_profile fonksiyonunu GÜNCELLE
+
 @router.get("/me", response_model=UserResponse)
 async def get_my_profile(
     current_user: dict = Depends(get_current_user_clean),
@@ -220,7 +222,27 @@ async def get_my_profile(
             )
         
         print(f"✅ Kullanıcı bulundu: {user.email}")
-        return UserResponse(**user.to_dict(include_sensitive=True))
+        
+        # ============ YENİ: Kullanıcının shop_id'sini bul ============
+        shop_id = None
+        try:
+            from sqlalchemy import text
+            shop_result = await db.execute(
+                text("SELECT id FROM shops WHERE user_id = :user_id LIMIT 1"),
+                {"user_id": str(user.id)}
+            )
+            shop_row = shop_result.fetchone()
+            if shop_row:
+                shop_id = str(shop_row[0])
+                print(f"✅ Kullanıcının shop_id'si: {shop_id}")
+        except Exception as e:
+            print(f"⚠️ Shop ID bulunamadı: {e}")
+        
+        # ============ UserResponse'a shop_id ekle ============
+        user_dict = user.to_dict(include_sensitive=True)
+        user_dict["shop_id"] = shop_id  # shop_id alanını ekle
+        
+        return UserResponse(**user_dict)
         
     except ValueError as e:
         print(f"❌ UUID dönüşüm hatası: {e}")
