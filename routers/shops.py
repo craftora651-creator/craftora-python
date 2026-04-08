@@ -50,6 +50,8 @@ class ShopBase(BaseSchema):
 class ShopCreate(ShopBase):
     """Create shop schema."""
     slug: Optional[str] = None
+    address: Optional[Dict[str, Any]] = Field(None, description="Shop address information")
+    social_media: Optional[Dict[str, Any]] = Field(None, description="Social media links")
     @validator('shop_name')
     def validate_shop_name(cls, v):
         """Validate shop name."""

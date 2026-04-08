@@ -3,7 +3,7 @@ from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field, validator, HttpUrl
 from decimal import Decimal
 from enum import Enum
-
+from uuid import UUID
 from routers.base import BaseSchema, TimestampSchema
 
 
@@ -32,7 +32,7 @@ class CartBase(BaseSchema):
 class CartCreate(CartBase):
     """Create cart schema (usually auto-created)."""
     session_id: Optional[str] = Field(None, max_length=255, description="Guest session ID")
-    user_id: Optional[str] = Field(None, description="User ID for logged-in users")
+    user_id: Optional[UUID] = Field(None, description="User ID for logged-in users")
 
 
 class CartUpdate(CartBase):
@@ -44,9 +44,9 @@ class CartUpdate(CartBase):
 
 class CartResponse(TimestampSchema):
     """Full cart response."""
-    id: str
+    id: UUID
     cart_token: str
-    user_id: Optional[str] = None
+    user_id: Optional[UUID] = None
     session_id: Optional[str] = None
     status: CartStatus = CartStatus.ACTIVE
     
@@ -67,6 +67,8 @@ class CartResponse(TimestampSchema):
     shipping_method: Optional[str] = None
     shipping_address: Optional[Dict[str, Any]] = None
     requires_shipping: bool = False
+    last_activity_at: Optional[datetime] = None
+    expires_at: Optional[datetime] = None
     
     # Items
     items: List["CartItemResponse"] = Field(default_factory=list)
@@ -129,8 +131,8 @@ class CartResponse(TimestampSchema):
 
 class CartItemBase(BaseSchema):
     """Base cart item schema."""
-    product_id: str = Field(..., description="Product ID")
-    variant_id: Optional[str] = Field(None, description="Variant ID")
+    product_id: UUID = Field(..., description="Product ID")
+    variant_id: Optional[UUID] = Field(None, description="Variant ID")
     quantity: int = Field(1, ge=1, le=100, description="Quantity")
     variant_options: Optional[Dict[str, Any]] = Field(None, description="Variant options")
 
@@ -147,11 +149,11 @@ class CartItemUpdate(BaseSchema):
 
 class CartItemResponse(TimestampSchema):
     """Cart item response."""
-    id: str
-    cart_id: str
-    product_id: str
-    shop_id: str
-    variant_id: Optional[str] = None
+    id: UUID
+    cart_id: UUID
+    product_id: UUID
+    shop_id: UUID
+    variant_id: Optional[UUID] = None
     
     # Product details (snapshot)
     product_name: str
@@ -266,7 +268,7 @@ class CartEstimateResponse(BaseSchema):
 
 class CartCheckoutPreview(BaseSchema):
     """Cart checkout preview."""
-    cart_id: str
+    cart_id: UUID
     payment_method: str = Field(..., pattern="^(stripe|paypal|bank_transfer)$")
     save_payment_method: bool = Field(False, description="Save payment method for future")
     billing_address: Optional[Dict[str, Any]] = Field(None, description="Billing address")
@@ -294,7 +296,7 @@ class CartRecoveryRequest(BaseSchema):
 
 class CartBulkUpdate(BaseSchema):
     """Bulk cart update (admin only)."""
-    cart_ids: List[str] = Field(..., min_items=1, max_items=100, description="Cart IDs")
+    cart_ids: List[UUID] = Field(..., min_items=1, max_items=100, description="Cart IDs")
     action: str = Field(..., pattern="^(abandon|recover|expire|convert)$", description="Action to perform")
     reason: Optional[str] = Field(None, max_length=500, description="Reason for action")
 

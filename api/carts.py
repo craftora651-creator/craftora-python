@@ -31,9 +31,17 @@ from routers.carts import (
     CartItemUpdate,
     CartCheckoutPreview
 )
+from uuid import UUID
 
+
+from models.cart import Cart, CartItem, CartStatus  # CartStatus'u da ekle
+
+import uuid
+import logging
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/carts", tags=["carts"])
-
+from sqlalchemy.orm import joinedload
+from datetime import timedelta, datetime
 # ==================== CART MANAGEMENT ====================
 
 @router.get("/my", response_model=CartResponse)
@@ -46,7 +54,7 @@ async def get_my_cart(
     Creates cart if it doesn't exist.
     """
     try:
-        cart_id = f"cart_{current_user['sub']}"
+        cart_id = UUID(current_user["sub"])
         
         # Get cart items from database (in production, use Redis or cart table)
         # For MVP, we'll use a simple in-memory approach
@@ -57,9 +65,17 @@ async def get_my_cart(
         
         cart_data = {
             "id": cart_id,
+            "cart_token": str(cart_id),  # ✅ String'e çevir
             "user_id": current_user["sub"],
             "items": cart_items,
-            **totals,
+            "items_subtotal": totals.get("items_subtotal", 0),
+            "shipping_total": totals.get("shipping_total", 0),
+            "tax_total": totals.get("tax_total", 0),
+            "order_total": totals.get("order_total", 0),
+            "discount_total": 0.0,
+            "coupon_code": None,
+            "last_activity_at": datetime.utcnow(),  # ✅ EKLE
+            "expires_at": datetime.utcnow() + timedelta(days=7),  # ✅ EKLE
             "created_at": datetime.utcnow().isoformat(),
             "updated_at": datetime.utcnow().isoformat(),
             "item_count": len(cart_items),
@@ -76,13 +92,12 @@ async def get_my_cart(
         )
 
 
-async def get_cart_items(cart_id: str, db: AsyncSession) -> List[Dict[str, Any]]:
-    """
-    Get cart items from storage.
-    In MVP, we'll simulate with function.
-    In production, use Redis/database.
-    """
-    return []
+async def get_cart_items(cart_id: UUID, db: AsyncSession):
+    result = await db.execute(
+        select(CartItem).where(CartItem.cart_id == cart_id)
+    )
+    items = result.scalars().all()
+    return [item.to_dict() for item in items]
 
 
 @router.post("/items", response_model=CartResponse)
@@ -91,9 +106,6 @@ async def add_to_cart(
     current_user: dict = Depends(get_current_user_clean),
     db: AsyncSession = Depends(get_db)
 ):
-    """
-    Add item to cart or update quantity.
-    """
     try:
         # Validate product
         result = await db.execute(
@@ -101,9 +113,7 @@ async def add_to_cart(
                 Product.id == item_data.product_id,
                 Product.status == ProductStatus.PUBLISHED,
                 Product.is_approved == True
-            ).options(
-                joinedload(Product.shop)
-            )
+            ).options(joinedload(Product.shop))
         )
         product = result.scalar_one_or_none()
         
@@ -114,13 +124,9 @@ async def add_to_cart(
                 detail="Product not found or not available"
             )
         
-        # Check if shop is active
         if not product.shop or product.shop.status != ShopStatus.ACTIVE:
-            raise ValidationException(
-                detail="Shop is not active"
-            )
+            raise ValidationException(detail="Shop is not active")
         
-        # Check stock for physical products
         if product.product_type == "physical":
             if not product.is_in_stock:
                 raise InsufficientStockException(
@@ -128,7 +134,6 @@ async def add_to_cart(
                     requested=item_data.quantity,
                     available=product.stock_quantity
                 )
-            
             if item_data.quantity > product.stock_quantity and not product.allows_backorder:
                 raise InsufficientStockException(
                     product_name=product.name,
@@ -136,22 +141,34 @@ async def add_to_cart(
                     available=product.stock_quantity
                 )
         
-        # Get current cart
-        cart_id = f"cart_{current_user['sub']}"
-        cart_items = await get_cart_items(cart_id, db)
+        # Get or create cart
+        cart_id = UUID(current_user["sub"])
         
-        # Check if item already in cart
-        item_index = -1
-        for i, item in enumerate(cart_items):
-            if item.get("product_id") == item_data.product_id:
-                item_index = i
-                break
+        # ÖNCE CART'I BUL VEYA OLUŞTUR
+        result = await db.execute(select(Cart).where(Cart.id == cart_id))
+        cart = result.scalar_one_or_none()
         
-        if item_index >= 0:
-            # Update existing item
-            new_quantity = cart_items[item_index]["quantity"] + item_data.quantity
+        if not cart:
+            cart = Cart(
+                cart_token=cart_id,
+                user_id=cart_id,
+                status="active"
+            )
+            db.add(cart)
+            await db.flush()  # SADECE FLUSH, COMMIT YOK
+        
+        # ŞİMDİ ITEM'E BAK
+        result = await db.execute(
+            select(CartItem).where(
+                CartItem.cart_id == cart_id,
+                CartItem.product_id == item_data.product_id
+            )
+        )
+        existing_item = result.scalar_one_or_none()
+        
+        if existing_item:
+            new_quantity = existing_item.quantity + item_data.quantity
             
-            # Check stock again for physical products
             if product.product_type == "physical":
                 if new_quantity > product.stock_quantity and not product.allows_backorder:
                     raise InsufficientStockException(
@@ -159,47 +176,61 @@ async def add_to_cart(
                         requested=new_quantity,
                         available=product.stock_quantity
                     )
-            cart_items[item_index]["quantity"] = new_quantity
-            cart_items[item_index]["item_total"] = float(product.current_price * Decimal(str(new_quantity)))
+            
+            existing_item.quantity = new_quantity
         else:
-            # Add new item
-            new_item = {
-                "product_id": product.id,
-                "shop_id": product.shop_id,
-                "product_name": product.name,
-                "product_type": product.product_type.value,
-                "quantity": item_data.quantity,
-                "unit_price": float(product.current_price),
-                "item_total": float(product.current_price * Decimal(str(item_data.quantity))),
-                "product_data": product.to_public_dict(),
-                "added_at": datetime.utcnow().isoformat()
-            }
-            cart_items.append(new_item)
-        # Save cart (in MVP, just return - in production, save to Redis/database)
-        # await save_cart_items(cart_id, cart_items)
+            new_item = CartItem(
+                cart_id=cart_id,
+                product_id=product.id,
+                shop_id=product.shop_id,
+                product_name=product.name,
+                product_slug=product.slug,
+                product_type=product.product_type.value,
+                quantity=item_data.quantity,
+                unit_price=Decimal(str(product.base_price)),
+            )
+            db.add(new_item)
+        
         # Update product cart add count
         await db.execute(
             update(Product)
             .where(Product.id == item_data.product_id)
             .values(cart_add_count=Product.cart_add_count + 1)
         )
+        
+        # TEK COMMIT
         await db.commit()
         
-        # Calculate totals
-        totals = await calculate_cart_totals(cart_items, db)
+        # Get updated cart items
+        result = await db.execute(
+            select(CartItem).where(CartItem.cart_id == cart_id)
+        )
+        cart_items = result.scalars().all()
+        cart_items_dict = [item.to_dict() for item in cart_items]
+        totals = await calculate_cart_totals(cart_items_dict, db)
         
         cart_data = {
             "id": cart_id,
-            "user_id": current_user["sub"],
-            "items": cart_items,
-            **totals,
+            "cart_token": str(cart_id),
+            "user_id": cart_id,
+            "items": cart_items_dict,
+            "items_subtotal": totals.get("items_subtotal", 0),
+            "shipping_total": totals.get("shipping_total", 0),
+            "tax_total": totals.get("tax_total", 0),
+            "order_total": totals.get("order_total", 0),
+            "discount_total": 0.0,
+            "coupon_code": None,
+            "last_activity_at": datetime.utcnow(),
+            "expires_at": datetime.utcnow() + timedelta(days=7),
             "created_at": datetime.utcnow().isoformat(),
             "updated_at": datetime.utcnow().isoformat(),
-            "item_count": len(cart_items),
-            "shop_count": len(set(item.get("shop_id") for item in cart_items if item.get("shop_id")))
+            "item_count": len(cart_items_dict),
+            "shop_count": len(set(item.get("shop_id") for item in cart_items_dict if item.get("shop_id")))
         }
+        
         logger.info(f"Item added to cart: {product.name} x{item_data.quantity} by {current_user['email']}")
         return CartResponse(**cart_data)
+        
     except (NotFoundException, ValidationException, InsufficientStockException):
         raise
     except Exception as e:
@@ -222,7 +253,7 @@ async def update_cart_item(
     """
     try:
         # Get current cart
-        cart_id = f"cart_{current_user['sub']}"
+        cart_id = UUID(current_user["sub"])
         cart_items = await get_cart_items(cart_id, db)
         
         # Find item in cart
@@ -263,7 +294,7 @@ async def update_cart_item(
                         )
                 
                 cart_items[item_index]["quantity"] = item_update.quantity
-                cart_items[item_index]["item_total"] = float(product.current_price * Decimal(str(item_update.quantity)))
+                cart_items[item_index]["item_total"] = float(product.base_price * Decimal(str(item_update.quantity)))
         
         # Save cart
         # await save_cart_items(cart_id, cart_items)
@@ -273,6 +304,7 @@ async def update_cart_item(
         
         cart_data = {
             "id": cart_id,
+            "cart_token": str(cart_id),
             "user_id": current_user["sub"],
             "items": cart_items,
             **totals,
@@ -308,7 +340,7 @@ async def remove_from_cart(
     """
     try:
         # Get current cart
-        cart_id = f"cart_{current_user['sub']}"
+        cart_id = UUID(current_user["sub"])
         cart_items = await get_cart_items(cart_id, db)
         
         # Find and remove item
@@ -330,6 +362,7 @@ async def remove_from_cart(
             "id": cart_id,
             "user_id": current_user["sub"],
             "items": new_items,
+            "cart_token": str(cart_id),
             **totals,
             "created_at": datetime.utcnow().isoformat(),
             "updated_at": datetime.utcnow().isoformat(),
@@ -360,11 +393,12 @@ async def clear_cart(
     Clear all items from cart.
     """
     try:
-        cart_id = f"cart_{current_user['sub']}"
+        cart_id = UUID(current_user["sub"])
         empty_cart = []
         cart_data = {
             "id": cart_id,
             "user_id": current_user["sub"],
+            "cart_token": str(cart_id),
             "items": empty_cart,
             "items_subtotal": 0.0,
             "shipping_total": 0.0,
@@ -429,6 +463,52 @@ async def calculate_cart_totals(cart_items: List[Dict[str, Any]], db: AsyncSessi
         "tax_total": float(tax_total),
         "order_total": float(order_total)
     }
+    
+async def get_cart_data(cart_id: str, db: AsyncSession, current_user: dict) -> dict:
+    """Get full cart data from database."""
+    from models.cart import Cart, CartItem  # import'u burada da yapabilirsin
+    cart_uuid = UUID(cart_id)  # Önce UUID'ye çevir
+    result = await db.execute(
+        select(Cart).where(Cart.id == cart_uuid)
+    )
+    cart = result.scalar_one_or_none()
+    
+    if not cart:
+        cart = Cart(
+            cart_token=cart_uuid,  # UUID
+            status=CartStatus.ACTIVE,
+            user_id=UUID(current_user["sub"])
+        )
+        db.add(cart)
+        await db.flush()
+    
+    # Get cart items
+    result = await db.execute(
+        select(CartItem).where(CartItem.cart_id == cart_uuid)
+    )
+    items = result.scalars().all()
+    
+    totals = await calculate_cart_totals([item.to_dict() for item in items], db)
+    
+    return {
+        "id": cart_id,
+        "cart_token": str(cart_id),
+        "user_id": current_user["sub"],
+        "items": [item.to_dict() for item in items],
+        "items_subtotal": totals.get("items_subtotal", 0),
+        "shipping_total": totals.get("shipping_total", 0),
+        "tax_total": totals.get("tax_total", 0),
+        "order_total": totals.get("order_total", 0),
+        "discount_total": 0.0,
+        "coupon_code": None,
+        "last_activity_at": datetime.utcnow(),
+        "expires_at": datetime.utcnow() + timedelta(days=7),
+        "created_at": datetime.utcnow().isoformat(),
+        "updated_at": datetime.utcnow().isoformat(),
+        "item_count": len(items),
+        "shop_count": len(set(item.shop_id for item in items))
+    }
+
 
 @router.get("/checkout/preview", response_model=CartCheckoutPreview)
 async def checkout_preview(
@@ -442,7 +522,7 @@ async def checkout_preview(
     """
     try:
         # Get current cart
-        cart_id = f"cart_{current_user['sub']}"
+        cart_id = UUID(current_user["sub"])
         cart_items = await get_cart_items(cart_id, db)
         
         if not cart_items:
@@ -590,7 +670,7 @@ async def merge_carts(
                             new_quantity = product.stock_quantity
                     
                     merged_items[i]["quantity"] = new_quantity
-                    merged_items[i]["item_total"] = float(product.current_price * Decimal(str(new_quantity)))
+                    merged_items[i]["item_total"] = float(product.base_price * Decimal(str(new_quantity)))
                     found = True
                     break
             
@@ -602,8 +682,8 @@ async def merge_carts(
                     "product_name": product.name,
                     "product_type": product.product_type.value,
                     "quantity": quantity,
-                    "unit_price": float(product.current_price),
-                    "item_total": float(product.current_price * Decimal(str(quantity))),
+                    "unit_price": float(product.base_price),
+                    "item_total": float(product.base_price * Decimal(str(quantity))),
                     "product_data": product.to_public_dict(),
                     "added_at": datetime.utcnow().isoformat()
                 }
@@ -630,7 +710,3 @@ async def merge_carts(
             detail="Could not merge carts"
         )
 
-
-# Add imports at the top
-from sqlalchemy.orm import joinedload
-from datetime import timedelta

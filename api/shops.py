@@ -8,7 +8,6 @@ from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File,
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, delete
 import httpx
-
 from database.database import get_db
 from helpers.security import get_current_user_clean, get_current_verified_user
 from nix.dependencies import (
@@ -27,7 +26,6 @@ from nix.exceptions import (
 )
 from nix.logging import logger, audit_logger, performance_logger
 from config.config import settings
-
 from models.shop import Shop, ShopStatus
 from models.user import User
 from routers.shops import (
@@ -39,12 +37,12 @@ from routers.shops import (
     ShopSearchParams
 )
 from models.shop import Shop, ShopStatus, SubscriptionStatus, ShopVisibility  # ✅
+import httpx
 
-# Create router
 router = APIRouter(prefix="/shops", tags=["shops"])
 
-
 # ==================== SHOP CREATION & BASIC CRUD ====================
+
 
 @router.post("/", response_model=ShopResponse)
 async def create_shop(
@@ -57,7 +55,6 @@ async def create_shop(
     User must be verified to create a shop.
     """
     try:
-        # Check if user already has a shop with same name/slug
         print(f"🔍 PENDING.value: {SubscriptionStatus.PENDING.value}")
         print(f"🔍 PENDING: {SubscriptionStatus.PENDING}")
         print(f"🔍 PENDING type: {type(SubscriptionStatus.PENDING.value)}")
@@ -68,21 +65,17 @@ async def create_shop(
             )
         )
         existing_shop = result.scalar_one_or_none()
-        
         if existing_shop:
             raise ResourceExistsException(
                 resource_type="Shop",
                 identifier=shop_data.slug,
                 detail="Shop with this name or slug already exists"
             )
-        
-        # ✅ DÜZELT: String'i UUID'ye çevir!
         from uuid import UUID
-        user_uuid = UUID(current_user["sub"])  # String'den UUID'ye
-        
-        # ✅ DÜZELT: UUID ile karşılaştır!
+        user_uuid = UUID(current_user["sub"])
+
         result = await db.execute(
-            select(Shop).where(Shop.user_id == user_uuid)  # UUID olarak!
+            select(Shop).where(Shop.user_id == user_uuid)
         )
         user_shops = result.scalars().all()
         
@@ -94,7 +87,7 @@ async def create_shop(
         # Create shop
         shop = Shop(
             **shop_data.dict(),
-            user_id=user_uuid,  # ✅ UUID olarak kaydet!
+            user_id=user_uuid,
             subscription_status="pending",
             is_verified=False,
             is_featured=False,
@@ -108,12 +101,31 @@ async def create_shop(
         # Update user's shop count
         await db.execute(
             update(User)
-            .where(User.id == user_uuid)  # ✅ UUID olarak!
+            .where(User.id == user_uuid)
             .values(shop_count=len(user_shops) + 1)
         )
         await db.commit()
         
         print(f"✅ Shop created: {shop.shop_name} by {current_user['email']}")
+        
+        # ============================================
+        # ✅ MAĞAZA OLUŞTUKTAN SONRA GO BACKEND'E HABER VER (TEMA OLUŞTUR)
+        # ============================================
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    "http://localhost:8082/api/shop/theme/initialize",
+                    json={"shop_id": str(shop.id)},
+                    timeout=5.0
+                )
+                if response.status_code == 200:
+                    print(f"✅ Go backend'de tema oluşturuldu: {shop.shop_name}")
+                else:
+                    print(f"⚠️ Go backend tema oluşturma hatası: {response.status_code} - {response.text}")
+        except httpx.ConnectError:
+            print(f"⚠️ Go backend'e bağlanılamadı (8082 portu kapalı olabilir)")
+        except Exception as e:
+            print(f"⚠️ Go backend isteği başarısız: {e}")
         
         return ShopResponse.from_orm(shop)
         
@@ -121,14 +133,14 @@ async def create_shop(
         raise
     except Exception as e:
         await db.rollback()
-        print(f"❌ Error creating shop: {e}")  # logger yoksa print kullan
+        print(f"❌ Error creating shop: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Could not create shop: {str(e)}"
         )
    
 
-@router.get("/my", response_model=List[ShopResponse])
+@router.get("/my")
 async def get_my_shops(
     current_user: dict = Depends(get_current_user_clean),
     db: AsyncSession = Depends(get_db)
@@ -147,28 +159,14 @@ async def get_my_shops(
         )
         shops = result.scalars().all()
         
-        # TÜM ZORUNLU ALANLARI EKLE!
+        # MANUEL DICT DÖNDÜR - Pydantic'ten kaçın
         response_shops = []
         for shop in shops:
-            shop_dict = {
+            response_shops.append({
                 "id": str(shop.id),
                 "user_id": str(shop.user_id),
                 "shop_name": shop.shop_name,
-                "slug": shop.slug,  # ✅ ZORUNLU!
-                "subscription_status": shop.subscription_status,  # ✅ ZORUNLU!
-                "visibility": shop.visibility,
-                "is_verified": shop.is_verified or False,
-                "is_featured": shop.is_featured or False,
-                "primary_category": shop.primary_category,
-                "total_products": shop.total_products or 0,
-                "total_orders": shop.total_orders or 0,
-                "total_revenue": float(shop.total_revenue) if shop.total_revenue else 0.0,
-                "average_rating": float(shop.average_rating) if shop.average_rating else 0.0,
-                "review_count": shop.review_count or 0,
-                "created_at": shop.created_at.isoformat() if shop.created_at else None,
-                "updated_at": shop.updated_at.isoformat() if shop.updated_at else None,
-                "published_at": shop.published_at.isoformat() if shop.published_at else None,
-                # Opsiyonel alanlar
+                "slug": shop.slug,
                 "description": shop.description,
                 "short_description": shop.short_description,
                 "slogan": shop.slogan,
@@ -183,15 +181,28 @@ async def get_my_shops(
                 "website_url": shop.website_url,
                 "tax_number": shop.tax_number,
                 "tax_office": shop.tax_office,
+                "primary_category": shop.primary_category,
                 "secondary_categories": shop.secondary_categories or [],
                 "tags": shop.tags or [],
-            }
-            response_shops.append(ShopResponse(**shop_dict))
+                "status": shop.status.value if shop.status else "draft",
+                "visibility": shop.visibility.value if shop.visibility else "public",
+                "subscription_status": shop.subscription_status.value if shop.subscription_status else "pending",
+                "is_verified": shop.is_verified or False,
+                "is_featured": shop.is_featured or False,
+                "total_products": shop.total_products or 0,
+                "total_orders": shop.total_orders or 0,
+                "total_revenue": float(shop.total_revenue) if shop.total_revenue else 0.0,
+                "average_rating": float(shop.average_rating) if shop.average_rating else 0.0,
+                "review_count": shop.review_count or 0,
+                "created_at": shop.created_at.isoformat() if shop.created_at else None,
+                "updated_at": shop.updated_at.isoformat() if shop.updated_at else None,
+                "published_at": shop.published_at.isoformat() if shop.published_at else None,
+            })
         
         return response_shops
         
     except Exception as e:
-        print(f"❌ Error getting user shops: {e}")  # logger yoksa print
+        print(f"❌ Error getting user shops: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Could not retrieve your shops: {str(e)}"
@@ -248,7 +259,7 @@ async def update_shop(
         result = await db.execute(
             select(Shop).where(
                 Shop.id == shop_id,
-                Shop.owner_id == current_user["sub"]
+                Shop.user_id == current_user["sub"]
             )
         )
         shop = result.scalar_one_or_none()
@@ -356,7 +367,7 @@ async def publish_shop(
         result = await db.execute(
             select(Shop).where(
                 Shop.id == shop_id,
-                Shop.owner_id == current_user["sub"]
+                Shop.user_id == current_user["sub"]
             )
         )
         shop = result.scalar_one_or_none()
@@ -370,24 +381,16 @@ async def publish_shop(
             raise ValidationException(
                 detail=f"Cannot publish shop with status: {shop.status.value}"
             )
-        
-        # Check if shop has minimum requirements
-        # In MVP, just check name and description
         if not shop.name or not shop.description:
             raise ValidationException(
                 detail="Shop must have name and description to publish"
             )
-        
-        # In MVP, automatically approve and activate
         shop.status = ShopStatus.ACTIVE
         shop.is_approved = True
         shop.published_at = datetime.utcnow()
-        
         await db.commit()
         await db.refresh(shop)
-        
         logger.info(f"Shop published: {shop.name} by {current_user['email']}")
-        
         return {
             "message": "Shop published successfully",
             "shop_id": shop_id,
@@ -420,7 +423,7 @@ async def suspend_shop(
         result = await db.execute(
             select(Shop).where(
                 Shop.id == shop_id,
-                Shop.owner_id == current_user["sub"]
+                Shop.user_id == current_user["sub"]
             )
         )
         shop = result.scalar_one_or_none()
@@ -474,7 +477,7 @@ async def activate_shop(
         result = await db.execute(
             select(Shop).where(
                 Shop.id == shop_id,
-                Shop.owner_id == current_user["sub"]
+                Shop.user_id == current_user["sub"]
             )
         )
         shop = result.scalar_one_or_none()
@@ -516,6 +519,8 @@ async def activate_shop(
 
 # ==================== SHOP SETTINGS & CONFIGURATION ====================
 
+
+
 @router.get("/{shop_id}/settings")
 async def get_shop_settings(
     shop_id: str,
@@ -526,36 +531,98 @@ async def get_shop_settings(
     Get shop settings (owner only).
     """
     try:
+        from uuid import UUID
+        
+        print("=" * 50)
+        print("📤 GET SHOP SETTINGS ÇAĞRILDI")
+        print(f"📤 shop_id: {shop_id}")
+        
+        user_uuid = UUID(current_user["sub"])
+        shop_uuid = UUID(shop_id)
+        
+        # 🔥 KRİTİK: YENİ BİR SORGU YAP - CACHE KULLANMA!
         result = await db.execute(
             select(Shop).where(
-                Shop.id == shop_id,
-                Shop.owner_id == current_user["sub"]
+                Shop.id == shop_uuid,
+                Shop.user_id == user_uuid
             )
         )
         shop = result.scalar_one_or_none()
         
         if not shop:
-            raise ForbiddenException(
-                detail="You don't have permission to view these settings"
-            )
+            raise HTTPException(status_code=403, detail="No permission or shop not found")
         
-        return {
+        # 🔥 KRİTİK: Session'ı kapatıp yeni sorgu yapmak için
+        await db.flush()
+        
+        # 🔥 KRİTİK: JSON field'ı manuel olarak oku
+        # SQLAlchemy'nin JSON field'ı bazen güncel olmayabiliyor
+        # Bu yüzden direkt veritabanından tekrar çekelim
+        from sqlalchemy import text
+        
+        raw_result = await db.execute(
+            text("SELECT settings FROM shops WHERE id = :id AND user_id = :user_id"),
+            {"id": str(shop_uuid), "user_id": str(user_uuid)}
+        )
+        raw_settings = raw_result.scalar_one_or_none()
+        
+        print(f"📦 RAW settings from DB: {raw_settings}")
+        
+        if raw_settings:
+            settings_data = raw_settings
+        else:
+            settings_data = shop.settings if shop.settings else {}
+        
+        print(f"📦 settings_data: {settings_data}")
+        
+        response_data = {
             "shop_id": str(shop.id),
-            "settings": shop.settings,
-            "metadata": shop.metadata,
-            "plan": shop.plan.value if shop.plan else None,
-            "subdomain": shop.subdomain
+            "contact_email": settings_data.get("contact_email", shop.contact_email or "") if isinstance(settings_data, dict) else "",
+            "support_email": settings_data.get("support_email", shop.support_email or "") if isinstance(settings_data, dict) else "",
+            "phone": settings_data.get("phone", shop.phone or "") if isinstance(settings_data, dict) else "",
+            "address": settings_data.get("address", {
+                "street": "",
+                "city": "",
+                "country": "",
+                "postal_code": ""
+            }) if isinstance(settings_data, dict) else {
+                "street": "",
+                "city": "",
+                "country": "",
+                "postal_code": ""
+            },
+            "social_media": settings_data.get("social_media", {
+                "instagram": "",
+                "facebook": "",
+                "tiktok": "",
+                "twitter": "",
+                "youtube": "",
+                "pinterest": ""
+            }) if isinstance(settings_data, dict) else {
+                "instagram": "",
+                "facebook": "",
+                "tiktok": "",
+                "twitter": "",
+                "youtube": "",
+                "pinterest": ""
+            }
         }
         
-    except ForbiddenException:
+        print(f"📤 Dönen response: {response_data}")
+        print("=" * 50)
+        
+        return response_data
+        
+    except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting shop settings: {e}")
+        print(f"❌ Error getting shop settings: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Could not retrieve shop settings"
+            detail=f"Could not retrieve shop settings: {str(e)}"
         )
-
+        
+        
 
 @router.put("/{shop_id}/settings")
 async def update_shop_settings(
@@ -568,41 +635,61 @@ async def update_shop_settings(
     Update shop settings (owner only).
     """
     try:
+        from uuid import UUID
+        
+        print("=" * 50)
+        print("📥 UPDATE SHOP SETTINGS ÇAĞRILDI")
+        print(f"📥 shop_id: {shop_id}")
+        print(f"📥 Gelen settings: {settings}")
+        
+        user_uuid = UUID(current_user["sub"])
+        shop_uuid = UUID(shop_id)
+        
         result = await db.execute(
             select(Shop).where(
-                Shop.id == shop_id,
-                Shop.owner_id == current_user["sub"]
+                Shop.id == shop_uuid,
+                Shop.user_id == user_uuid
             )
         )
         shop = result.scalar_one_or_none()
         
         if not shop:
-            raise ForbiddenException(
-                detail="You don't have permission to update these settings"
-            )
+            raise HTTPException(status_code=403, detail="No permission or shop not found")
         
-        # Merge settings
-        shop.settings.update(settings)
+        # 🔥 KRİTİK: JSON field'ı manuel olarak güncelle
+        current_settings = dict(shop.settings) if shop.settings else {}
+        current_settings.update(settings)
+        
+        # 🔥 KRİTİK: Yeni dict'i ata
+        shop.settings = current_settings
+        
+        # Also update direct fields if provided
+        if "contact_email" in settings:
+            shop.contact_email = settings["contact_email"]
+        if "support_email" in settings:
+            shop.support_email = settings["support_email"]
+        if "phone" in settings:
+            shop.phone = settings["phone"]
         
         await db.commit()
         await db.refresh(shop)
         
-        logger.info(f"Shop settings updated: {shop.name} by {current_user['email']}")
+        print(f"✅ COMMIT sonrası shop.settings: {shop.settings}")
         
         return {
-            "message": "Shop settings updated successfully",
+            "message": "Settings updated successfully", 
             "shop_id": str(shop.id),
             "settings": shop.settings
         }
         
-    except ForbiddenException:
+    except HTTPException:
         raise
     except Exception as e:
         await db.rollback()
-        logger.error(f"Error updating shop settings: {e}")
+        print(f"❌ Error updating shop settings: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Could not update shop settings"
+            detail=f"Could not update shop settings: {str(e)}"
         )
 
 
@@ -621,7 +708,7 @@ async def get_shop_stats(
         result = await db.execute(
             select(Shop).where(
                 Shop.id == shop_id,
-                Shop.owner_id == current_user["sub"]
+                Shop.user_id == current_user["sub"]
             )
         )
         shop = result.scalar_one_or_none()
@@ -683,7 +770,7 @@ async def upload_shop_logo(
         result = await db.execute(
             select(Shop).where(
                 Shop.id == shop_id,
-                Shop.owner_id == current_user["sub"]
+                Shop.user_id == current_user["sub"]
             )
         )
         shop = result.scalar_one_or_none()
@@ -692,19 +779,11 @@ async def upload_shop_logo(
             raise ForbiddenException(
                 detail="You don't have permission to upload logo for this shop"
             )
-        
-        # In MVP, just store a placeholder URL
-        # In production, upload to storage service
         logo_url = f"/uploads/shops/{shop_id}/logo_{datetime.utcnow().timestamp()}.{file.filename.split('.')[-1]}"
-        
-        # Update shop
         shop.logo_url = logo_url
-        
         await db.commit()
         await db.refresh(shop)
-        
         logger.info(f"Shop logo uploaded: {shop.name} by {current_user['email']}")
-        
         return {
             "message": "Logo uploaded successfully",
             "shop_id": str(shop.id),
@@ -713,7 +792,6 @@ async def upload_shop_logo(
             "content_type": file.content_type,
             "size": file.size
         }
-        
     except (ForbiddenException, ValidationException):
         raise
     except Exception as e:
@@ -723,8 +801,7 @@ async def upload_shop_logo(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Could not upload logo"
         )
-
-
+        
 # ==================== PUBLIC MARKETPLACE ENDPOINTS ====================
 
 @router.get("/public/list", response_model=List[ShopDetailResponse])
@@ -741,19 +818,13 @@ async def list_shops_public(
             Shop.status == ShopStatus.ACTIVE,
             Shop.is_approved == True
         )
-        
-        # Apply filters
         if search.name:
             query = query.where(Shop.name.ilike(f"%{search.name}%"))
         if search.category:
             query = query.where(Shop.category == search.category)
         if search.is_verified:
             query = query.where(Shop.is_verified == search.is_verified)
-        
-        # Apply pagination
         query = query.offset(pagination.offset).limit(pagination.limit)
-        
-        # Apply sorting
         if pagination.sort_by:
             sort_column = getattr(Shop, pagination.sort_by, None)
             if sort_column:
@@ -762,14 +833,10 @@ async def list_shops_public(
                 else:
                     query = query.order_by(sort_column.asc())
         else:
-            # Default sort by created_at desc
             query = query.order_by(Shop.created_at.desc())
-        
         result = await db.execute(query)
         shops = result.scalars().all()
-        
         return [ShopDetailResponse.from_orm(shop) for shop in shops]
-        
     except Exception as e:
         logger.error(f"Error listing public shops: {e}")
         raise HTTPException(

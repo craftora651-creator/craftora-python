@@ -7,6 +7,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from models.base import Base
+from sqlalchemy.dialects.postgresql import ENUM  # PostgreSQL enum için
 import enum
 import uuid
 
@@ -23,25 +24,29 @@ class CartStatus(enum.Enum):
 class Cart(Base):
     """Cart model - maps to 'carts' table."""
     __tablename__ = "carts"
-    
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4
+    )
     # ===== CART OWNER =====
-    user_id: Mapped[Optional[str]] = mapped_column(
-        String(36),
-        ForeignKey("users.id", ondelete="CASCADE")
+    user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+    UUID(as_uuid=True),
+    ForeignKey("users.id", ondelete="CASCADE")
     )
     session_id: Mapped[Optional[str]] = mapped_column(String(255), unique=True)
     
     # ===== CART IDENTITY =====
-    status: Mapped[str] = mapped_column(
-    String(20),
-    default=CartStatus.ACTIVE.value,
+    status: Mapped[CartStatus] = mapped_column(
+    ENUM(CartStatus, name='cart_status', create_type=False),
+    default=CartStatus.ACTIVE,
     nullable=False,
     index=True
     )
 
-    cart_token: Mapped[str] = mapped_column(
-        String(36),  # UUID as string
-        default=lambda: str(uuid.uuid4()),
+    cart_token: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        default=uuid.uuid4,
         nullable=False,
         index=True
     )
@@ -68,7 +73,7 @@ class Cart(Base):
     # ===== ABANDONED CART TRACKING =====
     abandoned_email_sent: Mapped[bool] = mapped_column(Boolean, default=False)
     abandoned_email_sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    recovery_token: Mapped[Optional[str]] = mapped_column(String(36))  # UUID
+    recovery_token: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True))  # ✅ Bu doğru
     
     # ===== METADATA =====
     meta_data: Mapped[dict] = mapped_column(
@@ -220,25 +225,22 @@ class CartItem(Base):
     """Cart item model - maps to 'cart_items' table."""
     __tablename__ = "cart_items"
     
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4
+    )
+    
     # ===== RELATIONSHIPS =====
-    cart_id: Mapped[str] = mapped_column(
-        String(36),
+    cart_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
         ForeignKey("carts.id", ondelete="CASCADE"),
         nullable=False,
         index=True
     )
-    product_id: Mapped[str] = mapped_column(
-        String(36),
-        ForeignKey("products.id", ondelete="CASCADE"),
-        nullable=False
-    )
-    shop_id: Mapped[str] = mapped_column(
-        String(36),
-        ForeignKey("shops.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True
-    )
-    variant_id: Mapped[Optional[str]] = mapped_column(String(36))
+    product_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    shop_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    variant_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True))
     
     # ===== PRODUCT DETAILS (Snapshot) =====
     product_name: Mapped[str] = mapped_column(String(200), nullable=False)
