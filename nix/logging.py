@@ -657,21 +657,7 @@ class AuditLogger:
             extra=extra
         )
 
-# AuditLogger class'ından sonra ekle:
-class RateLimitLogger:
-    """Rate limit logging için özel logger."""
-    
-    def __init__(self, logger_name: str = "app.rate_limit"):
-        self.logger = logging.getLogger(logger_name)
-    
-    def log_rate_limit_hit(self, client_ip: str, endpoint: str, limit: int):
-        extra = {
-            "client_ip": client_ip,
-            "endpoint": endpoint,
-            "rate_limit": limit,
-            "event": "rate_limit_hit"
-        }
-        self.logger.warning(f"Rate limit hit: {client_ip} -> {endpoint}", extra=extra)
+
 
 
 # Don't auto-initialize - let the app call setup_logging()
@@ -716,9 +702,6 @@ def get_audit_logger() -> AuditLogger:
         setup_logging()
         audit_logger = AuditLogger()
     return audit_logger
-
-
-
 
 class RateLimitLogger:
     """Rate limit logging için özel logger."""

@@ -58,7 +58,6 @@ class PermissionChecker:
 # Role-specific dependencies
 require_admin = RoleChecker(["admin"])
 require_seller = RoleChecker(["seller", "admin"])
-require_verified_seller = RoleChecker(["seller", "admin"])  # TODO: Add verification check
 
 # Permission-based dependencies
 can_create_shop = PermissionChecker("shop:create")
@@ -343,25 +342,18 @@ class FileUploadValidator:
 
 class APIKeyAuth:
     """API Key authentication for external services."""
-    
     def __init__(self):
         self.scheme = HTTPBearer(auto_error=False)
-    
     async def __call__(
         self,
         credentials: Optional[HTTPAuthorizationCredentials] = Depends(HTTPBearer(auto_error=False))
     ):
         if not credentials:
             raise UnauthorizedException(detail="API Key required")
-        
         api_key = credentials.credentials
-        
-        # Validate API key (in production, check against database)
-        valid_keys = settings.VALID_API_KEYS if hasattr(settings, "VALID_API_KEYS") else []
-        
+        valid_keys = getattr(settings, "VALID_API_KEYS", [])
         if api_key not in valid_keys:
             raise ForbiddenException(detail="Invalid API Key")
-        
         return {"api_key": api_key, "auth_type": "api_key"}
 
 
@@ -447,43 +439,8 @@ class TwoFactorRequired:
             raise ForbiddenException(detail="Two-factor authentication required")
         return current_user
 
-# Ekle: Geo-blocking
-class GeoBlockChecker:
-    """Block requests from specific countries."""
-    
-    BLOCKED_COUNTRIES = ["RU", "CN", "KP"]  # Örnek
-    
-    async def __call__(self, request: Request):
-        country = await self._get_country_from_ip(request.client.host)
-        if country in self.BLOCKED_COUNTRIES:
-            raise ForbiddenException(detail=f"Access blocked from {country}")
 
-async def require_verified_seller(
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
-    db: AsyncSession = Depends(get_db)
-):
-    """Require verified seller status."""
-    from models.user import User
-    from sqlalchemy import select
-    
-    if current_user.get("role") != "seller":
-        raise ForbiddenException(detail="Seller account required")
-    
-    result = await db.execute(
-        select(User).where(
-            User.id == current_user.get("sub"),
-            User.seller_verified == True
-        )
-    )
-    user = result.scalar_one_or_none()
-    
-    if not user:
-        raise ForbiddenException(detail="Seller verification required")
-    
-    return current_user
-
-
-# Export commonly used dependencies
+# ✅ Yeni __all__ (çakışmayan isim)
 __all__ = [
     "get_db",
     "get_current_active_user",

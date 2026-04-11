@@ -11,22 +11,16 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 import asyncpg
 from contextlib import asynccontextmanager
-
 from config.config import settings
 from models.base import Base
 
-# Configure logging
 logger = logging.getLogger(__name__)
-
-
 class DatabaseManager:
     """Database connection manager with connection pooling."""
-    
     def __init__(self):
         self.engine: Optional[AsyncEngine] = None
         self.async_session_maker: Optional[async_sessionmaker] = None
         self.is_connected: bool = False
-        
     async def initialize(self) -> None:
         """Initialize database connection pool."""
         try:
@@ -47,8 +41,6 @@ class DatabaseManager:
                     }
                 }
             )
-            
-            # Create session factory
             self.async_session_maker = async_sessionmaker(
                 self.engine,
                 class_=AsyncSession,
@@ -56,7 +48,6 @@ class DatabaseManager:
                 autoflush=False,
                 autocommit=False
             )
-            
             # Test connection
             await self.test_connection()
             self.is_connected = True
@@ -64,12 +55,10 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f" Failed to initialize database: {e}")
             raise
-    
     async def test_connection(self) -> bool:
         """Test database connection."""
         if not self.engine:
             raise RuntimeError("Database engine not initialized")
-        
         try:
             async with self.engine.connect() as conn:
                 # Test basic query
@@ -81,9 +70,7 @@ class DatabaseManager:
                 result = await conn.execute(text("SELECT current_database()"))
                 db_name = result.scalar()
                 logger.info(f" Database: {db_name}")
-                
                 return True
-                
         except asyncpg.exceptions.ConnectionDoesNotExistError:
             logger.error(" Database connection lost")
             return False
@@ -96,7 +83,6 @@ class DatabaseManager:
         """Get database session with automatic cleanup."""
         if not self.async_session_maker:
             raise RuntimeError("Database session factory not initialized")
-        
         session: AsyncSession = self.async_session_maker()
         try:
             yield session
@@ -107,7 +93,7 @@ class DatabaseManager:
             raise
         finally:
             await session.close()
-    
+
     async def create_tables(self) -> None:
         """Create all tables (for development only)."""
         if not self.engine:
@@ -118,29 +104,10 @@ class DatabaseManager:
                 await conn.execute(text("CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\""))
                 await conn.execute(text("CREATE EXTENSION IF NOT EXISTS \"citext\""))
                 await conn.execute(text("CREATE EXTENSION IF NOT EXISTS \"pg_trgm\""))
-
-                # Create all tables
                 await conn.run_sync(Base.metadata.create_all)
-                
             logger.info(" Database tables created successfully")
-            
         except Exception as e:
             logger.error(f" Failed to create tables: {e}")
-            raise
-    
-    async def drop_tables(self) -> None:
-        """Drop all tables (for testing only)."""
-        if not self.engine:
-            raise RuntimeError("Database engine not initialized")
-        
-        try:
-            async with self.engine.begin() as conn:
-                await conn.run_sync(Base.metadata.drop_all)
-                
-            logger.info(" Database tables dropped successfully")
-            
-        except Exception as e:
-            logger.error(f" Failed to drop tables: {e}")
             raise
     
     async def close(self) -> None:
@@ -238,20 +205,14 @@ async def init_db():
     Initialize database connection and create tables.
     """
     try:
-        from models.user import User
         from models.base import Base
-
         if not db_manager.engine:
             raise RuntimeError("Database engine not initialized")
-
         async with db_manager.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
-
         logger.info(" Database tables created/verified")
         return True
-
     except Exception as e:
         logger.error(f" Database initialization failed: {e}")
         raise
-
 engine = db_manager.engine if db_manager.engine else None

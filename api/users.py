@@ -6,7 +6,7 @@ from sqlalchemy import select, func, and_
 import uuid
 router = APIRouter(prefix="/users", tags=["users"])
 import logging
-
+from sqlalchemy import select
 from database.database import get_db
 from models.user import User, UserRole as ModelUserRole, AuthProvider as ModelAuthProvider
 # ✅ DOĞRU IMPORT PATH:
@@ -1073,3 +1073,46 @@ async def get_admin_stats_summary(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Could not retrieve admin statistics"
         )
+
+
+# routers/users.py - YENİ ENDPOINT
+@router.get("/me/sessions")
+async def get_my_sessions(
+    current_user: dict = Depends(get_current_user_clean),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get current user's login sessions."""
+    from models.user import UserSession
+    from sqlalchemy import select  # ✅ BUNU EKLE
+    import uuid  # ✅ BUNU EKLE
+    
+    user_id = current_user.get("user_id") or current_user.get("sub")
+    
+    # user_id string'ten UUID'ye çevir
+    try:
+        user_uuid = uuid.UUID(user_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid user ID format"
+        )
+    
+    result = await db.execute(
+        select(UserSession).where(
+            UserSession.user_id == user_uuid,
+            UserSession.is_revoked == False
+        ).order_by(UserSession.created_at.desc()).limit(20)
+    )
+    sessions = result.scalars().all()
+    
+    return [
+        {
+            "id": str(s.id),
+            "user_agent": s.user_agent,
+            "ip_address": s.ip_address,
+            "created_at": s.created_at.isoformat(),
+            "expires_at": s.expires_at.isoformat(),
+            "is_revoked": s.is_revoked
+        }
+        for s in sessions
+    ]

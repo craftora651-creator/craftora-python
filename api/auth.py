@@ -51,40 +51,12 @@ async def google_auth(
     """
     try:
         logger.info(f" Google auth - token doğrulanıyor...")
-        
-        # 🔧 TEST MODU - Eğer test-token gelirse sabit kullanıcı kullan
-        if request.id_token == "test-token" or request.id_token.startswith("test"):
-            logger.info("🔧 TEST MODU AKTİF - Sabit test kullanıcısı kullanılıyor")
-            result = await db.execute(
-                select(User).where(User.email == "test@craftora.com")
+        user_info = await security_manager.verify_google_token(request.id_token)
+        if not user_info:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid Google token"
             )
-            db_user = result.scalar_one_or_none()
-            if db_user:
-                user_info = {
-                    "google_id": str(db_user.id),  # Database'deki ID
-                    "email": db_user.email,  # Sabit email!
-                    "full_name": db_user.full_name,
-                    "email_verified": True,
-                    "avatar_url": db_user.avatar_url
-            }
-                logger.info(f"✅ Database'den kullanıcı bulundu: {db_user.id}")
-            else:
-                user_info = {
-                    "google_id": "07da0742-bf89-4966-a7d0-d5626d40724c",
-                    "email": "test@craftora.com",
-                    "full_name": "Test User",
-                    "email_verified": True,
-                    "avatar_url": None
-            }
-        else:
-            user_info = await security_manager.verify_google_token(request.id_token)
-            if not user_info:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Invalid Google token"
-                )
-    
-        
         # Email ile kullanıcı bul veya oluştur
         result = await db.execute(
             select(User).where(User.email == user_info["email"])
@@ -97,7 +69,7 @@ async def google_auth(
             # Var olan kullanıcıyı güncelle
             user.google_id = user_info["google_id"]
             user.full_name = user_info.get("full_name")
-            user.avatar_url = user_info.get("avatar_url")
+            
             user.last_login_at = datetime.utcnow()
             user.last_active_at = datetime.utcnow()
             user.auth_provider = AuthProvider.GOOGLE.value
@@ -140,8 +112,6 @@ async def google_auth(
                 "auth_provider": "google"
             }
         )
-        
-        # User minimal info
         user_minimal = UserMinimal(
             id=str(user.id),
             email=user.email,
@@ -150,7 +120,6 @@ async def google_auth(
             role=user.role if isinstance(user.role, str) else user.role.value,
             is_seller=user.is_seller
         )
-        
         response = AuthResponse(
             access_token=tokens.access_token,
             refresh_token=tokens.refresh_token,
@@ -159,10 +128,8 @@ async def google_auth(
             user=user_minimal.model_dump(),
             is_new_user=is_new_user
         )
-        
         logger.info(f" Google auth başarılı: {user.email}")
-        return response
-        
+        return response 
     except Exception as e:
         logger.error(f" Google auth error: {e}", exc_info=True)
         raise HTTPException(

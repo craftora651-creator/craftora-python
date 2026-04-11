@@ -739,4 +739,8 @@ __all__ = [
     "DeadlockException",
     "craftora_exception_handler",
     "generic_exception_handler",
+    "WebhookVerificationException",
+    "MaintenanceModeException", 
+    "ThirdPartyAPIException",
+    "AppleAuthException",
 ]

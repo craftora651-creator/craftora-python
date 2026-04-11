@@ -11,6 +11,7 @@ from models.base import Base
 import enum
 import uuid
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+from sqlalchemy.orm import Mapped, mapped_column, relationship 
 
 # ===== ENUMS =====
 class ShopStatus(enum.Enum):
@@ -63,6 +64,7 @@ class Shop(Base):
     description: Mapped[Optional[str]] = mapped_column(Text)
     short_description: Mapped[Optional[str]] = mapped_column(String(255))
     slogan: Mapped[Optional[str]] = mapped_column(String(200))
+    
     
     # ===== VISUALS =====
     logo_url: Mapped[Optional[str]] = mapped_column(Text)

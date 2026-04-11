@@ -83,9 +83,13 @@ app.mount("/go-uploads", StaticFiles(directory=go_uploads_path), name="go-upload
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:5173",  # ✅ React Vite portu
-        "https://staying-tahoe-departure-logged.trycloudflare.com",
-        "http://127.0.0.1:5173",  # ✅ Alternatif,
+        "http://localhost:5173",
+        "http://localhost:3000",           # Next.js için
+        "https://craftora.vercel.app",      # ✅ FRONTEND VERCEL
+        "https://craftora-z524.vercel.app", # ✅ SENİN SİTEN
+        "https://craftora-seven.vercel.app", # ✅ DİĞER
+        "https://craftora-python.vercel.app", # Backend'in kendisi
+        "https://craftora-go.vercel.app",     # Go backend
         "https://crafotra.netlify.app",
     ],
     allow_credentials=True,

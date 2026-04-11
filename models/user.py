@@ -9,39 +9,32 @@ from models.base import Base
 from sqlalchemy.sql import func
 from sqlalchemy import Column, text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
-
+from sqlalchemy.dialects.postgresql import INET
 
 class UserRole(str, enum.Enum):
     """User roles enum - SQL'deki user_role enum'u ile tam uyumlu"""
     USER = "user"
     SELLER = "seller"
     ADMIN = "admin"
-    
     def __str__(self):
         return self.value
-
 
 class AuthProvider(str, enum.Enum):
     """Authentication provider enum - SQL'deki auth_provider string'leri ile uyumlu"""
     GOOGLE = "google"
     APPLE = "apple"
     EMAIL = "email"
-
-
+    
 class User(Base):
     """User model - SQL users tablosu ile TAM UYUMLU"""
     __tablename__ = "users"
-    
-    # ===== PRIMARY IDENTIFIER =====
     id: Mapped[uuid.UUID] = mapped_column(
         PG_UUID(as_uuid=True), 
         primary_key=True,
         default=uuid.uuid4,
         server_default=func.gen_random_uuid()
     )
-    plan: Mapped[str] = mapped_column(String(50), default='free', server_default='free')
-    subscription_end_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    # ===== OAUTH IDENTITY =====
+    tax_id: Mapped[Optional[str]] = mapped_column(String(50))
     email: Mapped[str] = mapped_column(CITEXT, unique=True, index=True, nullable=False)
     google_id: Mapped[Optional[str]] = mapped_column(
         String(255), unique=True, index=True, nullable=True
@@ -51,8 +44,6 @@ class User(Base):
     )
     apple_private_email: Mapped[Optional[str]] = mapped_column(String(255), index=True)
     is_apple_provided_email: Mapped[bool] = mapped_column(Boolean, default=False)
-    
-    # ✅ auth_provider string (SQL'de VARCHAR(20)) - DÜZELTİLDİ
     auth_provider: Mapped[str] = mapped_column(
         String(20),
         default="google",
@@ -60,31 +51,18 @@ class User(Base):
         nullable=False,
         index=True
     )
-    
-    # ===== USER PROFILE =====
+    verification_documents: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB)
     full_name: Mapped[Optional[str]] = mapped_column(String(100), index=True)
     avatar_url: Mapped[Optional[str]] = mapped_column(Text)
     locale: Mapped[str] = mapped_column(String(10), default='tr_TR')
-    
-    # ===== SELLER SPECIFIC COLUMNS =====
     stripe_customer_id: Mapped[Optional[str]] = mapped_column(String(255), unique=True, index=True)
     stripe_account_id: Mapped[Optional[str]] = mapped_column(String(255), unique=True, index=True)
     seller_since: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     shop_count: Mapped[int] = mapped_column(Integer, default=0)
-    
-    # ===== YENİ SÜTUNLAR (SQL MIGRATION'DAN) =====
     seller_verified: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     verified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     phone_number: Mapped[Optional[str]] = mapped_column(String(20))
     business_name: Mapped[Optional[str]] = mapped_column(String(255))
-    
-    cj_email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    cj_api_key: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    cj_api_secret: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    cj_connected_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    cj_last_sync: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    
-    # ===== PLATFORM ROLE & STATUS =====
     role: Mapped[UserRole] = mapped_column(
         SQLEnum('user', 'seller', 'admin', name='user_role', create_type=False),
         default=UserRole.USER,
@@ -93,12 +71,6 @@ class User(Base):
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     is_verified: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
-    
-    # ===== SECURITY =====
-
-    # hashed_password BURADA DA YOK - SİLİNDİ
-    
-    # ===== PREFERENCES & METADATA =====
     preferences: Mapped[Dict[str, Any]] = mapped_column(
         JSONB,
         default=lambda: {
@@ -219,13 +191,6 @@ class User(Base):
         now = datetime.now(timezone.utc)
         return (now - self.created_at).days
     
-    @property
-    def is_cj_connected(self) -> bool:
-        """CJ hesabı bağlı mı?"""
-        return self.cj_api_key is not None
-    def update_cj_sync(self):
-        """Son senkronizasyon zamanını güncelle"""
-        self.cj_last_sync = datetime.now(timezone.utc)
     
     
     
@@ -353,7 +318,7 @@ class UserSession(Base):
     
     # Device info
     user_agent: Mapped[Optional[str]] = mapped_column(Text)
-    ip_address: Mapped[Optional[str]] = mapped_column(String(50))
+    ip_address: Mapped[Optional[str]] = mapped_column(INET)
     device_id: Mapped[Optional[str]] = mapped_column(String(255))
     
     # Security
@@ -405,7 +370,7 @@ class UserAuditLog(Base):
         nullable=True
     )
     
-    ip_address: Mapped[Optional[str]] = mapped_column(String(50))
+    ip_address: Mapped[Optional[str]] = mapped_column(INET)  # ✅
     user_agent: Mapped[Optional[str]] = mapped_column(Text)
     
     created_at: Mapped[datetime] = mapped_column(
